@@ -23,12 +23,15 @@ extern "C" {
 /* Currently only supports infrared NEC code */
 /* NEC time parameter configuration */
 #define IR_RX_NEC_BIT_NUM      8
-#define IR_RX_NEC_HEADER_US    13500
-#define IR_RX_NEC_DATA0_US     1120
-#define IR_RX_NEC_DATA1_US     2250
-#define IR_RX_NEC_TM1_REP_US   20000
-#define IR_RX_NEC_TM2_REP_US   11250
-#define IR_RX_ERROR_US         200 // Used to compensate errors
+#define IR_RX_NEC_HEADER_P_US     9000
+#define IR_RX_NEC_HEADER_S_US     4500
+#define IR_RX_NEC_REPEAT_S_US     2250
+#define IR_RX_NEC_DATA0_US        1125
+#define IR_RX_NEC_DATA1_US        2250
+#define IR_RX_NEC_DATA_ETX_US     562
+#define IR_RX_NEC_TM1_REP_US      20000
+#define IR_RX_NEC_TM2_REP_US      11812
+#define IR_RX_ERROR_US            200 // Used to compensate errors
 
 /**
  * @brief ir rx initialization parameter structure type definition

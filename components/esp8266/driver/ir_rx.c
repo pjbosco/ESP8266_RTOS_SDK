@@ -17,6 +17,7 @@
 #include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/portmacro.h"
 #include "freertos/ringbuf.h"
 #include "freertos/semphr.h"
 #include "esp_err.h"
@@ -60,6 +61,7 @@ static void IRAM_ATTR ir_rx_intr_handler(void *arg)
     static int cnt  =  0;
     static uint8_t rep_flg = 0;
     static uint32_t time_last = 0;
+    static uint32_t time_accumulated = 0;
 
     BaseType_t xHigherPriorityTaskWoken;
     uint32_t time_escape, time_current;
@@ -72,28 +74,41 @@ static void IRAM_ATTR ir_rx_intr_handler(void *arg)
 
     switch (ir_state) {
         case IR_RX_IDLE: {
-            if (time_escape < IR_RX_NEC_HEADER_US + IR_RX_ERROR_US && time_escape > IR_RX_NEC_HEADER_US - IR_RX_ERROR_US) {
+            if (time_escape < IR_RX_NEC_HEADER_P_US + IR_RX_ERROR_US && time_escape > IR_RX_NEC_HEADER_P_US - IR_RX_ERROR_US) {
+                ir_state = IR_RX_HEADER;
+            }
+        }
+        break;
+
+        case IR_RX_HEADER: {
+            if (time_escape < IR_RX_NEC_HEADER_S_US + IR_RX_ERROR_US && time_escape > IR_RX_NEC_HEADER_S_US - IR_RX_ERROR_US) {
                 ir_state = IR_RX_DATA;
+            } else {
+                goto reset_status;
             }
         }
         break;
 
         case IR_RX_DATA: {
-            if (time_escape < IR_RX_NEC_DATA1_US + IR_RX_ERROR_US && time_escape > IR_RX_NEC_DATA1_US - IR_RX_ERROR_US) {
+            time_accumulated += time_escape;
+            if (time_accumulated < IR_RX_NEC_DATA1_US + IR_RX_ERROR_US && time_accumulated > IR_RX_NEC_DATA1_US - IR_RX_ERROR_US) {
                 ir_data.val = (ir_data.val >> 1) | (0x1 << (IR_RX_NEC_BIT_NUM * 4 - 1));
+                time_accumulated = 0;
                 cnt++;
-            } else if (time_escape < IR_RX_NEC_DATA0_US + IR_RX_ERROR_US && time_escape > IR_RX_NEC_DATA0_US - IR_RX_ERROR_US) {
+            } else if (time_accumulated < IR_RX_NEC_DATA0_US + IR_RX_ERROR_US && time_accumulated > IR_RX_NEC_DATA0_US - IR_RX_ERROR_US) {
                 ir_data.val = (ir_data.val >> 1) | (0x0 << (IR_RX_NEC_BIT_NUM * 4 - 1));
+                time_accumulated = 0;
                 cnt++;
-            } else {
+            } else if (time_accumulated > IR_RX_NEC_DATA1_US + IR_RX_ERROR_US) {
                 goto reset_status;
             }
 
-            if (cnt == IR_RX_NEC_BIT_NUM * 4) {
+            if (cnt == IR_RX_NEC_BIT_NUM * 4 && time_escape < IR_RX_NEC_DATA_ETX_US + IR_RX_ERROR_US && time_escape > IR_RX_NEC_DATA_ETX_US - IR_RX_ERROR_US) {
                 // push rcv data to ringbuf
                 xRingbufferSendFromISR(ir_rx_obj->ring_buf, (void *) &ir_data, sizeof(ir_rx_nec_data_t) * 1, &xHigherPriorityTaskWoken);
                 ir_state = IR_RX_REP;
                 rep_flg = 0;
+                time_accumulated = 0;
             }
         }
         break;
@@ -106,12 +121,13 @@ static void IRAM_ATTR ir_rx_intr_handler(void *arg)
                     goto reset_status;
                 }
             } else if (rep_flg == 1) {
-                if (time_escape < IR_RX_NEC_TM1_REP_US + IR_RX_ERROR_US && IR_RX_NEC_TM2_REP_US - IR_RX_ERROR_US) {
+                time_accumulated += time_escape;
+                if (time_accumulated < IR_RX_NEC_TM1_REP_US + IR_RX_ERROR_US && time_accumulated > IR_RX_NEC_TM2_REP_US - IR_RX_ERROR_US) {
                     // push rcv data to ringbuf
                     xRingbufferSendFromISR(ir_rx_obj->ring_buf, (void *) &ir_data, sizeof(ir_rx_nec_data_t) * 1, &xHigherPriorityTaskWoken);
                     ir_repeat++;
                     rep_flg = 0;
-                } else {
+                } else if (time_accumulated > IR_RX_NEC_TM1_REP_US + IR_RX_ERROR_US) {
                     goto reset_status;
                 }
             }
@@ -120,7 +136,7 @@ static void IRAM_ATTR ir_rx_intr_handler(void *arg)
     }
 
     if (xHigherPriorityTaskWoken == pdTRUE) {
-        taskYIELD();
+        portYIELD_FROM_ISR();
     }
 
     return;
@@ -131,6 +147,7 @@ reset_status:
     ir_data.val = 0;
     ir_repeat = 0;
     rep_flg = 0;
+    time_accumulated = 0;
 }
 
 esp_err_t ir_rx_disable()
@@ -214,7 +231,7 @@ int ir_rx_recv_data(ir_rx_nec_data_t *data, size_t len, uint32_t timeout_ticks)
 static esp_err_t ir_rx_gpio_init(uint32_t io_num)
 {
     gpio_config_t io_conf;
-    io_conf.intr_type = GPIO_INTR_NEGEDGE;
+    io_conf.intr_type = GPIO_INTR_ANYEDGE;
     io_conf.pin_bit_mask = 1ULL << io_num;
     io_conf.mode = GPIO_MODE_INPUT;
     io_conf.pull_up_en = 1;
